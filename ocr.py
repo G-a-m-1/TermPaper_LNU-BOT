@@ -3,7 +3,6 @@ import pytesseract # (tesseract)
 from pypdf import PdfReader, PdfWriter
 from pdf2image import convert_from_path # (poppler)
 from fpdf import FPDF
-from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures import ThreadPoolExecutor
 from PIL import ImageOps
 
@@ -111,14 +110,9 @@ def _ocr_pages(file_path: str, ocr_needed: list) -> dict:
     if not ocr_needed:
         return ocr_results
 
-    if len(ocr_needed) <= max(MAX_WORKERS // 2, 1):
-        ExecutorClass = ThreadPoolExecutor
-    else:
-        ExecutorClass = ProcessPoolExecutor
-
     groups = _get_consecutive_groups(ocr_needed)
     workers = min(MAX_WORKERS, len(ocr_needed))
-    with ExecutorClass(max_workers=workers) as executor:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         for group in groups:
             first_page = group[0] + 1
             last_page = group[-1] + 1

@@ -12,6 +12,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from dotenv import load_dotenv
+from langchain_chroma import Chroma
+from langchain_core.vectorstores import VectorStoreRetriever
+from langchain_core.runnables import Runnable
+import re
 
 load_dotenv()
 
@@ -36,6 +40,9 @@ ADMIN_IDS = set(
 MAX_MESSAGE_LENGTH = 1000  # Обмеження довжини запиту
 
 # Ініціалізація RAG-модуля
+vectorstore: Chroma
+retriever: VectorStoreRetriever
+rag_chain: Runnable
 vectorstore, retriever, rag_chain = rag_module.initialize()
 
 class AdminFilter(Filter):
@@ -90,14 +97,13 @@ async def handle_document(message: types.Message, state: FSMContext):
         await status_msg.edit_text("Файл отримано. Додавання до бази...")
         print("Файл отримано. Додавання до бази...")
 
-
         result, file_path = ocr.process_one_pdf(file_path)
         if not result:
             await status_msg.edit_text(f"Помилка додавання файлу '{doc.file_name}' до бази.")
             print(f"Помилка додавання файлу '{doc.file_name}' до бази.")
             return
 
-        await asyncio.to_thread(db_manager.update_db_one_file, vectorstore,file_path)
+        await asyncio.to_thread(db_manager.update_db_one_file, vectorstore, file_path)
         
         print(f"Файл '{doc.file_name}' успішно додано до бази.")
         await status_msg.edit_text(f"Файл '{doc.file_name}' успішно додано до бази.")
@@ -123,12 +129,12 @@ async def scrape_lnu_cmd(message: types.Message):
             stats = await asyncio.to_thread(Scraper.run)
             total = stats['downloaded'] + stats['skipped']
             result = (
-                f"Сканування завершено\n\n"
-                f"Сторінок відвідано : {stats['pages']}\n"
-                f"Файлів завантажено : {stats['downloaded']}\n"
-                f"Пропущено (вже є)  : {stats['skipped']}\n"
-                f"Помилок            : {stats['errors']}\n"
-                f"Всього файлів      : {total}\n"
+                f"*Сканування завершено*\n\n"
+                f"Сторінок відвідано: {stats['pages']}\n"
+                f"Файлів завантажено: {stats['downloaded']}\n"
+                f"Пропущено (вже є): {stats['skipped']}\n"
+                f"Помилок: {stats['errors']}\n"
+                f"Всього файлів: {total}\n"
             )
 
             await msg_scrape.edit_text(result)
@@ -140,11 +146,11 @@ async def scrape_lnu_cmd(message: types.Message):
             stats = await asyncio.to_thread(ocr.process_pdfs)
             total = stats['ocred'] + stats['skipped'] + stats['errors']
             result = (
-                f"Оцифровка завершена\n\n"
-                f"Оцифровано : {stats['ocred']}\n"
-                f"Пропущено  : {stats['skipped']}\n"
-                f"Помилки    : {stats['errors']}\n"
-                f"Всього     : {total}\n"
+                f"*Оцифровка завершена*\n\n"
+                f"Оцифровано: {stats['ocred']}\n"
+                f"Пропущено: {stats['skipped']}\n"
+                f"Помилки: {stats['errors']}\n"
+                f"Всього: {total}\n"
             )
             await msg_ocr.edit_text(result)
 
@@ -153,16 +159,59 @@ async def scrape_lnu_cmd(message: types.Message):
 
             msg_db = await message.answer("Запуск завантаження у базу...")
             start = vectorstore._collection.count()
-            await asyncio.to_thread(db_manager.update_db, vectorstore)
+            stats = await asyncio.to_thread(db_manager.update_db, vectorstore)
             end = vectorstore._collection.count()
             dif = end - start
-            result = f"Завантаження у базу завершено. Створено {dif} нових фрагментів."
+            result = (
+                f"*Завантаження у базу завершено.* Було створено {dif} нових фрагментів.\n\n"
+                f"Завантажено: {stats['added']}\n"
+                f"Пропущено (вже є): {stats['skipped']}\n"
+                f"Не записаних: {stats['errors']}\n"
+                f"Всього: {total}\n"
+            )
+
             await msg_db.edit_text(result)
 
         except Exception as e:
-            print(f"[ПОМИЛКА] {e}")
+            print(f"[ПОМИЛКА]: {e}")
             await message.answer("Сталась помилка. Спробуйте знову пізніше")
 
+
+@dp.message(Command("status"), AdminFilter())
+async def status_cmd(message: types.Message):
+    """Відображення поточного стану системи"""
+    status = rag_module.get_status(vectorstore)
+    await message.answer(status)
+
+
+toggle_lock = asyncio.Lock()
+@dp.message(Command("toggle_model"), AdminFilter())
+async def toggle_model_cmd(message: types.Message):
+    """Перемикання між локальною та API моделлю"""
+    global rag_chain
+
+    if toggle_lock.locked():
+        await message.answer("Модель вже перемикається, зачекайте...")
+        return
+
+    async with toggle_lock:
+        msg = await message.answer("Перемикання моделі...")
+        try:
+            result_msg, rag_chain = await asyncio.to_thread(rag_module.toggle_model)
+            await msg.edit_text(result_msg)
+        except Exception as e:
+            print(f"[ПОМИЛКА] toggle_model: {e}")
+            await msg.edit_text(f"Помилка при перемиканні моделі: {e}")
+
+
+def sanitize_markdown(text: str) -> str:
+    # Замінюю **жирний** на *жирний*
+    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
+    # Замінюю __підкреслений__ — прибираю підкреслення
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    # Замінюю *   *текст* (зірочка як пункт + жирний) на -  *текст*
+    text = re.sub(r'^\*\s+(\*.*\*)', r'-  \1', text, flags=re.MULTILINE)
+    return text
 
 user_locks: dict[int, asyncio.Lock] = {}
 @dp.message()
@@ -183,7 +232,7 @@ async def handle_question(message: types.Message):
         await message.answer("Зачекайте, ваш попередній запит ще обробляється.")
         return
 
-        # Обмеження довжини запиту
+    # Обмеження довжини запиту
     if len(user_query) > MAX_MESSAGE_LENGTH:
         await message.answer("Питання занадто довге. Спробуйте сформулювати ваш запит коротше.")
         return
@@ -193,7 +242,7 @@ async def handle_question(message: types.Message):
     async with user_locks[user_id]:
         try:
             # Отримання документів з бази
-            docs = await asyncio.wait_for(asyncio.to_thread(retriever.invoke, user_query), timeout = 60.0)
+            docs = await asyncio.wait_for(asyncio.to_thread(retriever.invoke, user_query), timeout=60.0)
             rag_module.debug_docs(user_query, docs) # Вивід у консоль для діагностики 
             # Перевірка чи знайдено контекст
             if not docs:
@@ -202,7 +251,8 @@ async def handle_question(message: types.Message):
             context_text = rag_module.format_docs(docs)
 
             # Генерація відповіді через модель
-            response = await asyncio.wait_for(asyncio.to_thread(rag_chain.invoke, {"context": context_text, "question": user_query}), timeout=600.0)
+            response = await asyncio.wait_for(asyncio.to_thread(rag_chain.invoke, {"context": context_text, "question": user_query}), timeout=1000.0)
+            response = sanitize_markdown(response) 
             rag_module.debug_response(response)
             if len(response) > 4096: # 4096 - ліміт Telegram
                 await status_msg.edit_text(response[:4090] + "\n[...]")
@@ -216,7 +266,6 @@ async def handle_question(message: types.Message):
             await status_msg.edit_text(f"Виникла технічна помилка. Спробуйте пізніше або перефразуйте питання.")
 
 
-
 async def setup_commands():
     # команди для всіх користувачів
     user_commands = [
@@ -227,7 +276,9 @@ async def setup_commands():
     # команди для адмінів
     admin_commands = user_commands + [
         types.BotCommand(command="add_file", description="Додати файл у базу даних"),
-        types.BotCommand(command="scrape_lnu", description="Провірити на наявність нових документів")
+        types.BotCommand(command="scrape_lnu", description="Провірити на наявність нових документів"),
+        types.BotCommand(command="status", description="Стан системи"),
+        types.BotCommand(command="toggle_model", description="Перемкнути локальна/API модель"),
     ]
 
     # встановлюю звичайне меню для всіх

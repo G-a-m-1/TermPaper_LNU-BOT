@@ -9,10 +9,12 @@ from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 
+
+
 # Налаштування
 DB_DIR = "./db"
 DOCS_DIR = os.path.join("Data", "D_pdfs")
-EMBEDDINGS = OllamaEmbeddings(model="qwen3-embedding:0.6b") #"nomic-embed-text"для англійської,"bge-m3" не працює,"mxbai-embed-large:latest": мале вікно, "qwen3-embedding:0.6b"
+EMBEDDINGS_MODEL = "qwen3-embedding:0.6b" #"nomic-embed-text"для англійської,"bge-m3" не працює,"mxbai-embed-large:latest": мале вікно, "qwen3-embedding:0.6b"
 CHUNK_SIZE = 3000
 CHUNK_OVERLAP = 100
 TEXT_SPLITTER = RecursiveCharacterTextSplitter(
@@ -21,6 +23,8 @@ TEXT_SPLITTER = RecursiveCharacterTextSplitter(
     separators=["\n\n", "\n", ".", "!", "?", " "] # Пріоритет розрізу для збереження сенсу
 )
 BATCH_SIZE = 10
+
+
 
 def _process_single_pdf(file_path):
     """Функція для обробки одного файлу"""
@@ -92,8 +96,12 @@ def _process_single_pdf(file_path):
         print(f"Помилка при читанні {file_path}: {e}")
         return []
 
-def _db_add_clean_chunks(vectorstore:Chroma, processed_docs:list) -> None:
+
+def _db_add_clean_chunks(vectorstore: Chroma, processed_docs: list) -> bool:
     """Завантажує у базу даних передані документи"""
+    if not processed_docs:
+        print(f"    [ПОМИЛКА]: Не створено фрагментів для обробки")
+        return False
     print(f"    Створено {len(processed_docs)} фрагментів...")
     for i in range(0, len(processed_docs), BATCH_SIZE):
         batch = processed_docs[i : i + BATCH_SIZE]
@@ -101,10 +109,15 @@ def _db_add_clean_chunks(vectorstore:Chroma, processed_docs:list) -> None:
             vectorstore.add_documents(batch)
             print(f"    {i+1} - {min(i + BATCH_SIZE, len(processed_docs))} фрагменти успішно додані у базу.")
         except Exception as e:
-            print(f"    Помилка: {e}")
+            print(f"    [ПОМИЛКА]: {e}")
+            return False
+    return True
 
-def update_db(vectorstore, docs_dir = DOCS_DIR):
+
+def update_db(vectorstore, docs_dir = DOCS_DIR)->dict:
     """Функція для оновлення бази даних з файлів заданої директорії"""
+    ollama_manager.start_ollama(False)
+    stats: dict = {'added': 0, 'skipped': 0, 'errors': 0}
     
     # Пошук файлів для обробки
     files_to_process = []
@@ -114,10 +127,12 @@ def update_db(vectorstore, docs_dir = DOCS_DIR):
             result = vectorstore.get(where={"source": full_path}, limit=1) # Перевірка чи вже є у базі
             if not result['ids']:
                 files_to_process.append(full_path) # Якщо файлу нема - додаю
+            else:
+                stats['skipped'] += 1
 
     if not files_to_process:
         print("Нових документів не знайдено.")
-        return
+        return stats
 
     print(f"Знайдено {len(files_to_process)} нових файлів. Обробка...")
     
@@ -130,7 +145,7 @@ def update_db(vectorstore, docs_dir = DOCS_DIR):
         queue.put(None)  # сигнал що все оброблено
 
     
-    def consumer(queue:Queue, files:list) -> None:
+    def consumer(queue:Queue, files:list,stats:dict) -> None:
         """Функція для завантаження у базу документів у потоці з черги"""
         while True:
             item = queue.get()
@@ -139,26 +154,36 @@ def update_db(vectorstore, docs_dir = DOCS_DIR):
             chunks, index = item
 
             print(f"[{index+1}/{len(files)}] Обробка {os.path.basename(files[index])}...")
-            _db_add_clean_chunks(vectorstore, chunks)
-            print(f"    Успішно оброблено!")
+            result = _db_add_clean_chunks(vectorstore, chunks)
+            if result:
+                print(f"    Успішно оброблено!")
+                stats['added'] += 1
+            else:
+                print(f"    Виникли помилки при обробці!")
+                stats['errors'] += 1
 
 
     queue = Queue(maxsize=3)  # буфер на 3 файли
     t_producer = Thread(target=producer, args=(queue, files_to_process))
-    t_consumer = Thread(target=consumer, args=(queue, files_to_process))
+    t_consumer = Thread(target=consumer, args=(queue, files_to_process, stats))
     t_producer.start()
     t_consumer.start()
     t_producer.join()
     t_consumer.join()
+    _print_summary(stats)
+    return stats
 
 
 def update_db_one_file(vectorstore, full_path:str) -> None:
     """Функція для оновлення бази даних з одного файлу"""
+    ollama_manager.start_ollama(False)
     chunks = _process_single_pdf(full_path)
     _db_add_clean_chunks(vectorstore, chunks)
 
-def delete_db(vectorstore):
+
+def delete_db(vectorstore)->None:
     """Функція для видалення бази даних"""
+    ollama_manager.start_ollama(False)
     all_ids = vectorstore.get()['ids']
     if not all_ids:
         print("[ПОПЕРЕДЖЕННЯ] База даних вже порожня.")
@@ -167,12 +192,24 @@ def delete_db(vectorstore):
     print(f"Видалено {len(all_ids)} записів з бази даних.")
 
 
-def get_vectorstore(db_dir:str = DB_DIR, embeddings:OllamaEmbeddings = EMBEDDINGS) -> Chroma:
+def get_vectorstore(db_dir: str = DB_DIR) -> Chroma:
+    embeddings = OllamaEmbeddings(model=EMBEDDINGS_MODEL)
     return Chroma(persist_directory=db_dir, embedding_function=embeddings)
 
 
+def _print_summary(stats: dict) -> None:
+    total = stats['added'] + stats['skipped'] + stats['errors']
+    print("\n\n" + "=" * 80)
+    print("Завантаження у базу завершено")
+    print("=" * 80)
+    print(f"Завантажено        : {stats['added']}")
+    print(f"Пропущено (вже є)  : {stats['skipped']}")
+    print(f"Не записаних       : {stats['errors']}")
+    print(f"Всього файлів      : {total}")
+    print("=" * 80)
+
+
 if __name__ == "__main__":
-    ollama_manager.start_ollama(False)
     if not os.path.exists(DOCS_DIR):
         print(f"[ПОПЕРЕДЖЕННЯ] Вхідна папка '{DOCS_DIR}' не існує!")
         os.makedirs(DOCS_DIR)
