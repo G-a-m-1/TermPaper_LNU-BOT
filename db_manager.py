@@ -117,7 +117,7 @@ def _db_add_clean_chunks(vectorstore: Chroma, processed_docs: list) -> bool:
 def update_db(vectorstore, docs_dir = DOCS_DIR)->dict:
     """Функція для оновлення бази даних з файлів заданої директорії"""
     ollama_manager.start_ollama(False)
-    stats: dict = {'added': 0, 'skipped': 0, 'errors': 0}
+    stats: dict = {'added': 0, 'skipped': 0, 'errors': 0, 'count':0}
     
     # Пошук файлів для обробки
     files_to_process = []
@@ -162,6 +162,7 @@ def update_db(vectorstore, docs_dir = DOCS_DIR)->dict:
                 print(f"    Виникли помилки при обробці!")
                 stats['errors'] += 1
 
+    start = vectorstore._collection.count()
 
     queue = Queue(maxsize=3)  # буфер на 3 файли
     t_producer = Thread(target=producer, args=(queue, files_to_process))
@@ -170,6 +171,10 @@ def update_db(vectorstore, docs_dir = DOCS_DIR)->dict:
     t_consumer.start()
     t_producer.join()
     t_consumer.join()
+
+    end = vectorstore._collection.count()
+    count = end - start
+    stats['count'] = count
     _print_summary(stats)
     return stats
 
@@ -200,12 +205,12 @@ def get_vectorstore(db_dir: str = DB_DIR) -> Chroma:
 def _print_summary(stats: dict) -> None:
     total = stats['added'] + stats['skipped'] + stats['errors']
     print("\n\n" + "=" * 80)
-    print("Завантаження у базу завершено")
+    print(f"Завантаження у базу завершено. Було створено {stats['count']} нових фрагментів.")
     print("=" * 80)
-    print(f"Завантажено        : {stats['added']}")
-    print(f"Пропущено (вже є)  : {stats['skipped']}")
-    print(f"Не записаних       : {stats['errors']}")
-    print(f"Всього файлів      : {total}")
+    print(f"Завантажено файлів   : {stats['added']}")
+    print(f"Пропущено(дублікати) : {stats['skipped']}")
+    print(f"Не записаних         : {stats['errors']}")
+    print(f"Всього перевірено    : {total}")
     print("=" * 80)
 
 

@@ -198,16 +198,14 @@ def _scrape_page(url: str = DEFAULT_URL, save_dir: str = DEFAULT_SAVE_DIR,
 
 
 def _print_summary(stats: dict, save_dir: str) -> None:
-    total = stats['downloaded'] + stats['skipped']
     print("\n\n" + "=" * 80)
     print("Сканування завершено")
     print("=" * 80)
-    print(f"Сторінок відвідано : {stats['pages']}")
-    print(f"Файлів завантажено : {stats['downloaded']}")
-    print(f"Пропущено (вже є)  : {stats['skipped']}")
-    print(f"Помилок            : {stats['errors']}")
-    print(f"Всього файлів      : {total}")
-    print(f"Папка збереження   : {os.path.abspath(save_dir)}")
+    print(f"Сторінок відвідано   : {stats['pages']}")
+    print(f"Файлів завантажено   : {stats['downloaded']}")
+    print(f"Пропущено(дублікати) : {stats['skipped']}")
+    print(f"Помилок              : {stats['errors']}")
+    print(f"Папка збереження     : {os.path.abspath(save_dir)}")
     print("=" * 80)
 
 def run(url: str = DEFAULT_URL, save_dir: str = DEFAULT_SAVE_DIR, depth: int = DEFAULT_DEPTH) -> dict:

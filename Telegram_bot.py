@@ -132,9 +132,8 @@ async def scrape_lnu_cmd(message: types.Message):
                 f"*Сканування завершено*\n\n"
                 f"Сторінок відвідано: {stats['pages']}\n"
                 f"Файлів завантажено: {stats['downloaded']}\n"
-                f"Пропущено (вже є): {stats['skipped']}\n"
+                f"Пропущено(дублікати): {stats['skipped']}\n"
                 f"Помилок: {stats['errors']}\n"
-                f"Всього файлів: {total}\n"
             )
 
             await msg_scrape.edit_text(result)
@@ -146,11 +145,11 @@ async def scrape_lnu_cmd(message: types.Message):
             stats = await asyncio.to_thread(ocr.process_pdfs)
             total = stats['ocred'] + stats['skipped'] + stats['errors']
             result = (
-                f"*Оцифровка завершена*\n\n"
-                f"Оцифровано: {stats['ocred']}\n"
-                f"Пропущено: {stats['skipped']}\n"
-                f"Помилки: {stats['errors']}\n"
-                f"Всього: {total}\n"
+                f"*OCR та очищення тексту завершено*\n\n"
+                f"Збережено файлів: {stats['ocred']}\n"
+                f"Пропущено(дублікати): {stats['skipped']}\n"
+                f"Не записаних: {stats['errors']}\n"
+                f"Всього перевірено: {total}\n"
             )
             await msg_ocr.edit_text(result)
 
@@ -163,11 +162,11 @@ async def scrape_lnu_cmd(message: types.Message):
             end = vectorstore._collection.count()
             dif = end - start
             result = (
-                f"*Завантаження у базу завершено.* Було створено {dif} нових фрагментів.\n\n"
+                f"*Завантаження у базу даних завершено.* Було створено {dif} нових фрагментів.\n\n"
                 f"Завантажено: {stats['added']}\n"
-                f"Пропущено (вже є): {stats['skipped']}\n"
+                f"Пропущено(дублікати) : {stats['skipped']}\n"
                 f"Не записаних: {stats['errors']}\n"
-                f"Всього: {total}\n"
+                f"Всього перевірено: {total}\n"
             )
 
             await msg_db.edit_text(result)
@@ -207,10 +206,12 @@ async def toggle_model_cmd(message: types.Message):
 def sanitize_markdown(text: str) -> str:
     # Замінюю **жирний** на *жирний*
     text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
-    # Замінюю __підкреслений__ — прибираю підкреслення
+    # Прибираю нижнє підкреслення
     text = re.sub(r'__(.+?)__', r'\1', text)
     # Замінюю *   *текст* (зірочка як пункт + жирний) на -  *текст*
     text = re.sub(r'^\*\s+(\*.*\*)', r'-  \1', text, flags=re.MULTILINE)
+    # Екранування _ у посиланнях, щоб Telegram не інтерпретував як курсив
+    text = re.sub(r'https?://[^\s)>\],;:]+', lambda m: m.group(0).replace('_', '\\_'), text)
     return text
 
 user_locks: dict[int, asyncio.Lock] = {}
@@ -295,7 +296,7 @@ async def main():
     os.makedirs(SOURCE_DIR, exist_ok=True)
     await setup_commands()
     print(f"База даних: {rag_module.DB_DIR}")
-    print(f"Документів у базі: {vectorstore._collection.count()}")
+    print(f"Фрагментів у базі даних: {vectorstore._collection.count()}")
     print("Бот запущений.")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

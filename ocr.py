@@ -290,13 +290,13 @@ def process_one_pdf(file_path:str, output_path: str|None = None) -> tuple[bool,s
 def _print_summary(stats: dict, save_dir: str) -> None:
     total = stats['ocred'] + stats['skipped'] + stats['errors']
     print("\n\n" + "=" * 80)
-    print("Оцифровка завершена")
+    print("OCR та очищення тексту завершено")
     print("=" * 80)
-    print(f"Оцифровано         : {stats['ocred']}")
-    print(f"Пропущено (вже є)  : {stats['skipped']}")
-    print(f"Не записаних       : {stats['errors']}")
-    print(f"Всього файлів      : {total}")
-    print(f"Папка збереження   : {os.path.abspath(save_dir)}")
+    print(f"Збережено файлів       : {stats['ocred']}")
+    print(f"Пропущено(дублікати)   : {stats['skipped']}")
+    print(f"Не записаних           : {stats['errors']}")
+    print(f"Всього перевірено      : {total}")
+    print(f"Папка збереження       : {os.path.abspath(save_dir)}")
     print("=" * 80)
 
 def delete_output(output_dir: str = OUTPUT_DIR) -> None:
